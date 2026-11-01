@@ -1,0 +1,8 @@
+# Конфигурация визуализатора зависимостей
+package_name = "requests"
+repo_url = "https://pypi.org/project/requests/"
+work_mode = "test"
+package_version = "2.31.0"
+image_filename = "graph.png"
+ascii_tree = true
+max_depth = 3
