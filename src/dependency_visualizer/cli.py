@@ -1,4 +1,4 @@
-"""Command-line entry point for the dependency visualizer (stages 1-4)."""
+"""Command-line entry point for the dependency visualizer (stages 1-5)."""
 
 import argparse
 import sys
@@ -7,7 +7,6 @@ from dependency_visualizer.config import load_config
 from dependency_visualizer.graph import (
     build_graph_dfs,
     find_reverse_dependencies_dfs,
-    format_graph,
     format_reverse_dependencies,
 )
 from dependency_visualizer.nuget import (
@@ -17,12 +16,13 @@ from dependency_visualizer.nuget import (
     resolve_dependency_version,
 )
 from dependency_visualizer.test_repository import build_test_graph
+from dependency_visualizer.visualization import generate_dot, render_svg, format_ascii_tree
 
 
 def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dependency-visualizer",
-        description="Анализ графа зависимостей NuGet-пакета (этапы 1–4).",
+        description="Анализ и визуализация графа зависимостей NuGet-пакета (этапы 1–5).",
     )
     parser.add_argument(
         "-c", "--config",
@@ -79,11 +79,34 @@ def main() -> int:
     print(f"Корневой пакет: {config.package_name}")
     print(f"Версия: {config.package_version}")
     print(f"Режим тестового репозитория: {config.test_mode}")
-    print(format_graph(result))
+    print("\nСписок смежности:")
+    for package, dependencies in result.edges.items():
+        print(f"{package} -> {', '.join(dependencies) if dependencies else '(нет зависимостей)'}")
     print("\nВерсии пакетов:")
     for package, version in result.resolved_versions.items():
         print(f"{package}: {version}")
-    print("\nЭтап 3 завершён: граф зависимостей построен алгоритмом DFS.")
+    if result.cycles:
+        print("\nЦиклические рёбра:")
+        for source, target in result.cycles:
+            print(f"{source} -> {target}")
+    else:
+        print("\nЦиклические зависимости не обнаружены.")
+    print("Этап 3 завершён: граф зависимостей построен алгоритмом DFS.")
+
+    try:
+        dot_source = generate_dot(result)
+        print("\nОписание графа в формате Graphviz DOT:")
+        print(dot_source, end="")
+        output_path = render_svg(dot_source, config.output_file)
+        print(f"\nSVG-изображение графа сохранено: {output_path.resolve()}")
+    except RuntimeError as error:
+        print(f"Ошибка визуализации: {error}", file=sys.stderr)
+        return 2
+
+    if config.ascii_tree:
+        print("\nASCII-дерево зависимостей:")
+        print(format_ascii_tree(result))
+    print("\nЭтап 5 завершён: описание Graphviz создано, SVG сформирован.")
 
     if args.reverse_dependencies is not None:
         target = args.reverse_dependencies or config.package_name

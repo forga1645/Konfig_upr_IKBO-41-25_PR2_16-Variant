@@ -1,0 +1,6 @@
+package_name = "C"
+repository = "tests/fixtures/stage3_graph.json"
+test_mode = true
+package_version = "1.0.0"
+output_file = "stage5_C.svg"
+ascii_tree = true

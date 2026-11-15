@@ -1,0 +1,16 @@
+digraph dependencies {
+  graph [label="Dependency graph", labelloc="t", rankdir="LR"];
+  node [shape="box", style="rounded,filled", fillcolor="lightgoldenrod1"];
+  edge [color="slategray"];
+  "C" [label="C\\ntest", shape="doubleoctagon", fillcolor="palegreen"];
+  "D" [label="D\\ntest"];
+  "A" [label="A\\ntest"];
+  "B" [label="B\\ntest"];
+  "E" [label="E\\ntest"];
+  "C" -> "D";
+  "C" -> "E";
+  "D" -> "A";
+  "A" -> "B";
+  "A" -> "C" [color="firebrick", penwidth="2"];
+  "B" -> "D" [color="firebrick", penwidth="2"];
+}
