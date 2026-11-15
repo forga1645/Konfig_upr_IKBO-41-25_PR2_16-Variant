@@ -1,8 +1,8 @@
 # Dependency Visualizer
 
-CLI-инструмент для практической работы №2, **вариант 16, этапы 1–3**.
+CLI-инструмент для практической работы №2, **вариант 16, этапы 1–4**.
 Программа читает TOML-конфигурацию, получает прямые зависимости NuGet и
-строит граф транзитивных зависимостей рекурсивным обходом DFS.
+строит граф транзитивных зависимостей рекурсивным обходом DFS и находит обратные зависимости.
 
 ## Реализованные этапы
 
@@ -37,6 +37,40 @@ CLI-инструмент для практической работы №2, **в
 - В тестовом режиме можно проверить ветвления, общие зависимости, конечные
   узлы и циклы без доступа к интернету.
 
+### Этап 4 — обратные зависимости
+
+- Добавлен режим `--reverse-dependencies [PACKAGE]`.
+- Программа находит пакеты, у которых есть прямое ребро к указанному пакету,
+  то есть пакеты, которые непосредственно зависят от него.
+- Поиск выполняется рекурсивным DFS по графу, построенному на этапе 3.
+- Уже посещённые вершины не обходятся повторно, поэтому циклы не приводят
+  к бесконечной рекурсии.
+- Если имя пакета не передано после параметра, используется `package_name`
+  из TOML. Если пакет не входит в построенный граф, выводится понятная ошибка.
+- Если обратных зависимостей нет, программа выводит пустой результат и число 0.
+
+Примеры запуска на Windows из корня проекта:
+
+```bat
+set PYTHONPATH=src
+python -m dependency_visualizer --config config.test.toml --reverse-dependencies D
+python -m dependency_visualizer --config config.test.toml --reverse-dependencies E
+python -m dependency_visualizer --config config.test.toml --reverse-dependencies
+python -m dependency_visualizer --config config.test.no_reverse.toml --reverse-dependencies A
+```
+
+Для тестового графа из `stage3_graph.json`:
+- у `D` обратные зависимости `B` и `C`;
+- у `E` обратная зависимость `C`;
+- у `A` обратная зависимость `D` (это ребро цикла).
+- в отдельном ациклическом тестовом графе у корневого `A` обратных
+  зависимостей нет (`config.test.no_reverse.toml`).
+
+**Границы режима:** поиск выполняется среди вершин графа, который построен от
+корневого пакета на этапе 3. Это не глобальный поиск по всему каталогу NuGet:
+NuGet V3 не предоставляет готовый список всех пакетов, зависящих от заданного
+пакета, в используемом здесь endpoint метаданных.
+
 ## Структура проекта
 
 ```text
@@ -49,16 +83,19 @@ dependency_visualizer/
 │       ├── config.py
 │       ├── graph.py
 │       ├── nuget.py
-│       └── test_graph.py
+│       └── test_repository.py
 ├── tests/
 │   ├── fixtures/
 │   │   ├── nuget_test_repository.json
-│   │   └── stage3_graph.json
+│   │   ├── stage3_graph.json
+│   │   └── stage4_acyclic_graph.json
 │   ├── test_config.py
 │   ├── test_nuget.py
-│   └── test_graph.py
+│   ├── test_graph.py
+│   └── test_reverse_dependencies.py
 ├── config.toml
 ├── config.test.toml
+├── config.test.no_reverse.toml
 ├── README.md
 ├── .gitignore
 └── run.bat
@@ -67,9 +104,9 @@ dependency_visualizer/
 - `config.py` — чтение и проверка TOML.
 - `nuget.py` — HTTP-запросы к NuGet V3, разбор `.nuspec`, выбор версии
   зависимости из NuGet version index.
-- `graph.py` — рекурсивный DFS, список смежности, обнаружение циклов и
-  текстовое представление дерева.
-- `test_graph.py` в `src` — чтение тестового графа из JSON.
+- `graph.py` — рекурсивный DFS, список смежности, обнаружение циклов,
+  поиск обратных зависимостей и форматирование результатов.
+- `test_repository.py` — чтение тестового графа из JSON.
 - `cli.py` — связывает конфигурацию, загрузку метаданных и построение графа.
 - `tests/` — автоматические тесты.
 - `config.toml` — конфигурация реального NuGet-репозитория.
@@ -155,7 +192,8 @@ python -m unittest discover -s tests -v
 
 Тесты не требуют интернета. Проверяются TOML, разбор NuGet `.nuspec`, HTTP
 последовательность с подменёнными ответами, рекурсивный DFS, общие зависимости,
-циклы, некорректные имена тестовых пакетов и отсутствие корневого узла.
+циклы, обратные зависимости (несколько, одна, отсутствие, цикл), некорректные
+имена тестовых пакетов и отсутствие корневого узла.
 
 ## Обработка ошибок
 
@@ -163,7 +201,7 @@ python -m unittest discover -s tests -v
 отсутствии пакета/версии, некорректном JSON/XML, неподдерживаемом диапазоне
 версий, повреждённом тестовом графе или отсутствии корневого пакета.
 
-## Git-коммит этапа 3
+## Git-коммит этапа 4
 
 Откройте проект через GitHub Desktop → **Repository → Open in Command Prompt**.
 Затем выполните:
@@ -172,7 +210,7 @@ python -m unittest discover -s tests -v
 git status
 git add .
 git status
-git commit -m "feat(graph): build recursive DFS dependency graph"
+git commit -m "feat(graph): add reverse dependency lookup"
 ```
 
 Вернитесь в GitHub Desktop и нажмите **Push origin**.

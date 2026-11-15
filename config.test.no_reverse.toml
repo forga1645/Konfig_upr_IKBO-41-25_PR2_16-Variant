@@ -1,0 +1,7 @@
+# Offline-конфигурация: ациклический граф для проверки отсутствия обратных зависимостей у A.
+package_name = "A"
+repository = "tests/fixtures/stage4_acyclic_graph.json"
+test_mode = true
+package_version = "1.0.0"
+output_file = "dependencies.svg"
+ascii_tree = true
