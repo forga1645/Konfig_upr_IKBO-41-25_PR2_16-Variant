@@ -1,0 +1,7 @@
+# Offline-конфигурация для демонстрации этапа 3.
+package_name = "A"
+repository = "tests/fixtures/stage3_graph.json"
+test_mode = true
+package_version = "1.0.0"
+output_file = "dependencies.svg"
+ascii_tree = true

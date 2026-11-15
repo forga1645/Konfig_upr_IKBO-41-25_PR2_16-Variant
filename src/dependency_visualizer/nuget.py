@@ -170,3 +170,71 @@ def load_test_dependencies(repository_file: str | Path, package_name: str, packa
             target_framework=str(item.get("target_framework", "all")),
         ))
     return dependencies
+
+
+def _version_key(version: str):
+    """A small NuGet/SemVer ordering helper implemented with stdlib only."""
+    import re
+
+    clean = version.split("+", 1)[0]
+    main, separator, prerelease = clean.partition("-")
+    numbers = tuple(int(part) for part in main.split("."))
+    pre_parts = []
+    if separator:
+        for part in prerelease.split("."):
+            pre_parts.append((0, int(part)) if part.isdigit() else (1, part.casefold()))
+    return numbers, (1, ()) if not separator else (0, tuple(pre_parts))
+
+
+def _satisfies_version(version: str, version_range: str) -> bool:
+    """Check common NuGet exact, minimum and interval version expressions."""
+    value = version_range.strip()
+    if not value or value == "(не указана)" or value == "*":
+        return True
+    try:
+        candidate = _version_key(version)
+        if value[0:1] in "[(" and value[-1:] in ")]":
+            body = value[1:-1]
+            if "," not in body:
+                return candidate == _version_key(body.strip()) if body.strip() else True
+            lower, upper = (part.strip() for part in body.split(",", 1))
+            if lower:
+                lower_key = _version_key(lower)
+                if candidate < lower_key or (candidate == lower_key and value[0] == "("):
+                    return False
+            if upper:
+                upper_key = _version_key(upper)
+                if candidate > upper_key or (candidate == upper_key and value[-1] == ")"):
+                    return False
+            return True
+        # A bare NuGet version is a minimum inclusive version.
+        return candidate >= _version_key(value)
+    except (ValueError, TypeError):
+        # Unknown/floating syntax: avoid silently claiming a precise match.
+        return version.casefold() == value.casefold()
+
+
+def resolve_dependency_version(package_name: str, version_range: str, repository_url: str) -> str:
+    """Resolve a dependency range to the highest matching version in NuGet."""
+    index_bytes = _http_get(repository_url)
+    try:
+        service_index = json.loads(index_bytes.decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise NuGetError(f"Некорректный JSON service index: {error}") from error
+    base_address = _find_package_base_address(service_index, repository_url)
+    package_id = urllib.parse.quote(package_name.lower(), safe="")
+    versions_url = urllib.parse.urljoin(base_address, f"{package_id}/index.json")
+    try:
+        payload = json.loads(_http_get(versions_url).decode("utf-8-sig"))
+        versions = payload.get("versions", [])
+    except (UnicodeDecodeError, json.JSONDecodeError, AttributeError) as error:
+        raise NuGetError(f"Не удалось прочитать список версий {package_name}: {error}") from error
+    matching = [item for item in versions if isinstance(item, str) and _satisfies_version(item, version_range)]
+    if not matching:
+        raise NuGetError(
+            f"Для зависимости '{package_name}' не найдена версия, подходящая под '{version_range}'."
+        )
+    try:
+        return max(matching, key=_version_key)
+    except (ValueError, TypeError):
+        return matching[-1]
