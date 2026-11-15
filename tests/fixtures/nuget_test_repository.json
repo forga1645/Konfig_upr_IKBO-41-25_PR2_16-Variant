@@ -1,0 +1,18 @@
+{
+  "packages": {
+    "Newtonsoft.Json": {
+      "13.0.3": {
+        "dependencies": []
+      }
+    },
+    "Example.Library": {
+      "1.2.0": {
+        "dependencies": [
+          {"id": "System.Text.Json", "version": "[8.0.0, 9.0.0)", "target_framework": "net8.0"},
+          {"id": "Microsoft.Extensions.Logging.Abstractions", "version": "8.0.0", "target_framework": "net8.0"},
+          {"id": "System.Text.Json", "version": "[7.0.0, 8.0.0)", "target_framework": "net6.0"}
+        ]
+      }
+    }
+  }
+}

@@ -1,31 +1,41 @@
 # Dependency Visualizer
 
-Минимальный CLI-прототип для практической работы №2, **вариант 16,
-этап 1** (дисциплина «Конфигурационное управление»).
+CLI-инструмент для практической работы №2, **вариант 16, этапы 1–2**.
+Программа читает параметры из TOML и получает прямые зависимости конкретной
+версии NuGet-пакета.
 
 ## Что реализовано
 
-Параметры читаются из TOML-файла. При запуске приложение проверяет
-конфигурацию и печатает все параметры в формате `ключ = значение`.
+### Этап 1 — минимальный прототип с конфигурацией
 
-- `package_name` — имя анализируемого NuGet-пакета.
-- `repository` — URL репозитория NuGet либо путь к файлу тестового репозитория.
-- `test_mode` — `true` для тестового файла, `false` для URL.
-- `package_version` — версия пакета.
-- `output_file` — имя будущего SVG-файла (на этапе 1 файл ещё не создаётся).
-- `ascii_tree` — включение режима ASCII-дерева (само дерево реализуется
-  на последующих этапах).
+- Параметры берутся из `config.toml`.
+- Проверяются все шесть параметров: имя пакета, URL/путь репозитория,
+  режим тестового репозитория, версия, имя SVG-файла, режим ASCII-дерева.
+- Сохранён CLI-запуск через `python -m dependency_visualizer`.
 
-Этап 1 не получает зависимости из NuGet и не строит граф. Это соответствует
-разделению требований по этапам в задании.
+### Этап 2 — сбор данных
+
+- Используется формат пакетов .NET (NuGet).
+- Получение данных выполняется для точной версии из `package_version`.
+- Для реального репозитория программа запрашивает NuGet V3 service index,
+  находит ресурс `PackageBaseAddress`, затем загружает `.nuspec` выбранной
+  версии пакета.
+- XML `.nuspec` разбирается встроенным `xml.etree.ElementTree`.
+- Выводятся все прямые зависимости, их диапазоны версий и целевые framework-группы.
+- Для offline-проверки оставлен тестовый режим с JSON-файлом.
+
+**Ограничение задания соблюдено:** не вызываются `dotnet`, `nuget`, `PackageReference`
+или сторонние библиотеки для разрешения/получения зависимостей. HTTP выполняется
+стандартным `urllib`, XML/JSON разбираются стандартными модулями Python.
 
 ## Требования
 
 - Windows 10/11
-- Python 3.11 или новее (для встроенного модуля `tomllib`)
-- Git (для отправки проекта на GitHub)
+- Python 3.11 или новее
+- Для реального режима — доступ к сети и URL NuGet V3 service index
+- Git — для сохранения результата коммитом
 
-Внешние Python-библиотеки не нужны.
+Внешние Python-пакеты устанавливать не требуется.
 
 ## Структура проекта
 
@@ -36,135 +46,134 @@ dependency_visualizer/
 │       ├── __init__.py
 │       ├── __main__.py
 │       ├── cli.py
-│       └── config.py
+│       ├── config.py
+│       └── nuget.py
 ├── tests/
-│   └── test_config.py
+│   ├── fixtures/
+│   │   └── nuget_test_repository.json
+│   ├── test_config.py
+│   └── test_nuget.py
 ├── config.toml
 ├── README.md
 ├── .gitignore
 └── run.bat
 ```
 
-- `src/dependency_visualizer/config.py` — модель параметров и чтение/валидация TOML.
-- `src/dependency_visualizer/cli.py` — аргументы запуска и вывод параметров.
-- `src/dependency_visualizer/__main__.py` — запуск через `python -m`.
-- `tests/` — автоматические тесты проверки конфигурации.
-- `config.toml` — пользовательские настройки.
-- `run.bat` — запуск на Windows.
+- `config.py` — модель настроек и проверка TOML.
+- `cli.py` — точка входа CLI: загружает конфигурацию, запускает получение зависимостей и печатает результат.
+- `nuget.py` — NuGet V3 HTTP-клиент, извлечение PackageBaseAddress и разбор `.nuspec`; здесь же находится чтение тестового JSON.
+- `__main__.py` — запуск пакета командой `python -m`.
+- `tests/test_config.py` — тесты параметров конфигурации.
+- `tests/test_nuget.py` — тесты разбора `.nuspec`, HTTP-последовательности и тестового репозитория.
+- `tests/fixtures/nuget_test_repository.json` — небольшой offline-набор для ручной демонстрации.
+- `config.toml` — пользовательские параметры.
+- `run.bat` — запуск в Windows.
 
-## Настройка и запуск
+## Настройка и запуск в Windows
 
-1. Установите Python 3.11+ и отметьте опцию **Add Python to PATH**.
-2. Откройте папку проекта в проводнике.
-3. Отредактируйте `config.toml`.
-4. Запустите `run.bat` двойным щелчком либо из терминала:
+1. Установите Python 3.11+ и включите **Add Python to PATH**.
+2. Откройте `config.toml` и укажите пакет, версию и URL репозитория.
+3. Для обычной работы оставьте `test_mode = false`.
+4. Запустите `run.bat` двойным щелчком или из `cmd`:
 
 ```bat
 run.bat
 ```
 
-Можно указать другой конфигурационный файл:
+Пример конфигурации для публичного NuGet:
 
-```bat
-.venv\Scripts\python.exe -m dependency_visualizer --config my-config.toml
+```toml
+package_name = "Newtonsoft.Json"
+repository = "https://api.nuget.org/v3/index.json"
+test_mode = false
+package_version = "13.0.3"
+output_file = "dependencies.svg"
+ascii_tree = true
 ```
 
-Без виртуального окружения:
+В обычном режиме указывается именно URL V3 service index, а не страница пакета
+на nuget.org.
 
-```bat
-python -m dependency_visualizer --config config.toml
+## Offline-режим для демонстрации
+
+В `config.toml` временно укажите:
+
+```toml
+package_name = "Example.Library"
+repository = "tests/fixtures/nuget_test_repository.json"
+test_mode = true
+package_version = "1.2.0"
+output_file = "dependencies.svg"
+ascii_tree = true
 ```
 
-## Пример вывода
+Затем запустите `run.bat`. Должны появиться три прямые зависимости:
+
+- `System.Text.Json`, диапазон `[8.0.0, 9.0.0)`, framework `net8.0`;
+- `Microsoft.Extensions.Logging.Abstractions`, версия `8.0.0`, framework `net8.0`;
+- `System.Text.Json`, диапазон `[7.0.0, 8.0.0)`, framework `net6.0`.
+
+Одинаковый пакет может присутствовать в разных framework-группах с разными
+ограничениями версии. Программа намеренно показывает обе записи, а не выбирает
+одну без заданного целевого framework.
+
+## Пример результата
+
+Фактический список зависит от метаданных NuGet для выбранного пакета и версии.
+Формат вывода:
 
 ```text
-Параметры приложения:
-package_name = Newtonsoft.Json
-repository = https://api.nuget.org/v3/index.json
-test_mode = false
-package_version = 13.0.3
-output_file = dependencies.svg
-ascii_tree = true
+Прямые зависимости NuGet-пакета
+Пакет: Example.Library
+Версия: 1.2.0
+Репозиторий: tests/fixtures/nuget_test_repository.json
+Количество прямых зависимостей: 3
+1. System.Text.Json (версия: [8.0.0, 9.0.0); целевой framework: net8.0)
+2. Microsoft.Extensions.Logging.Abstractions (версия: 8.0.0; целевой framework: net8.0)
+3. System.Text.Json (версия: [7.0.0, 8.0.0); целевой framework: net6.0)
 
-Этап 1 завершён: конфигурация успешно загружена.
+Этап 2 завершён: прямые зависимости получены.
 ```
 
 ## Проверка тестами
 
-Из корня проекта:
+Из корня проекта выполните:
 
 ```bat
 set PYTHONPATH=src
 python -m unittest discover -s tests -v
 ```
 
-Тесты проверяют корректную конфигурацию и ошибки каждого параметра:
-имя пакета, URL/путь тестового репозитория, тип `test_mode`, версию,
-имя SVG-файла, тип `ascii_tree`, а также отсутствие конфигурационного файла.
+Тесты не обращаются к интернету: сетевые ответы для проверки клиента
+подменяются локальными данными. Отдельно проверяются конфигурация, разбор XML,
+несколько framework-групп, отсутствие зависимостей и тестовый JSON-репозиторий.
 
-## Обработка ошибок вручную
+## Обработка ошибок
 
-Попробуйте по очереди изменить в `config.toml`:
+Программа сообщает понятную ошибку, если:
 
-- `package_name = "bad name"` — недопустимое имя.
-- `repository = "not-a-url"` при `test_mode = false` — неверный URL.
-- `test_mode = "no"` — вместо логического значения передана строка.
-- `test_mode = true` и несуществующий путь в `repository` — файл не найден.
-- `package_version = "??"` — неверная версия.
-- `output_file = "graph.png"` — требуется расширение `.svg`.
-- `ascii_tree = "yes"` — требуется `true` или `false`.
+- конфигурация отсутствует или имеет неверный TOML-синтаксис;
+- URL репозитория недоступен или возвращает HTTP-ошибку;
+- service index не содержит `PackageBaseAddress`;
+- пакет/версия не найдены (HTTP 404);
+- ответ service index не является корректным JSON;
+- файл `.nuspec` содержит некорректный XML;
+- в тестовом репозитории нет указанной версии.
 
-После каждого изменения запустите `run.bat`. Для успешного запуска
-верните исходные корректные значения.
+## Git: коммит этапа 2
 
-## Git и коммиты
-
-Используйте Conventional/Scoped Commits. Пример сообщения для этапа 1:
-
-```text
-feat(config): add TOML configuration and CLI prototype
-```
-
-Подробная инструкция по публикации проекта через GitHub Desktop приведена
-ниже.
-
-### Публикация через GitHub Desktop
-
-1. Создайте пустой репозиторий на GitHub (можно без README и `.gitignore`).
-2. Откройте GitHub Desktop.
-3. Выберите **File → Add local repository...** и укажите папку проекта.
-   Если GitHub Desktop сообщает, что это ещё не Git-репозиторий, выберите
-   **create a repository** или сначала выполните `git init` в терминале.
-4. В GitHub Desktop проверьте список изменений, введите сообщение коммита
-   `feat(config): add TOML configuration and CLI prototype`.
-5. Нажмите **Commit to main**.
-6. Нажмите **Publish repository** (или **Push origin**, если remote уже создан).
-
-### Если удобнее открыть проект через командную строку
-
-В GitHub Desktop откройте **File → Options → Integrations** и проверьте,
-что выбран терминал (например, Git Bash). Затем откройте папку проекта
-в Проводнике, в адресной строке введите `cmd` и нажмите Enter.
-
-В открывшемся окне выполните:
+Если проект уже находится под Git, откройте папку проекта в командной строке
+через GitHub Desktop (**Repository → Open in Command Prompt**, название пункта
+может отличаться в зависимости от версии), затем выполните:
 
 ```bat
-git init
+git status
 git add .
-git commit -m "feat(config): add TOML configuration and CLI prototype"
+git status
+git commit -m "feat(nuget): fetch direct dependencies for package version"
 ```
 
-После этого вернитесь в GitHub Desktop: добавьте локальный репозиторий
-через **File → Add local repository...**, затем нажмите **Publish repository**.
+Вернитесь в GitHub Desktop и нажмите **Push origin**. Если репозиторий ещё не
+опубликован, нажмите **Publish repository**.
 
-Если репозиторий на GitHub уже создан и подключён как `origin`, можно
-отправить коммит командой:
-
-```bat
-git branch -M main
-git remote add origin https://github.com/ВАШ_ЛОГИН/ИМЯ_РЕПОЗИТОРИЯ.git
-git push -u origin main
-```
-
-Не выполняйте `git remote add`, если `origin` уже существует. Проверить
-его можно командой `git remote -v`.
+Если Git-репозиторий ещё не создан, сначала выполните `git init` в папке проекта.
