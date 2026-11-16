@@ -1,18 +1,71 @@
-"""Recursive DFS construction of a dependency graph with cycle detection."""
+"""Recursive DFS operations for dependency graphs."""
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from dependency_visualizer.nuget import Dependency
 
 
 @dataclass(frozen=True)
 class GraphResult:
+    """Dependency graph and metadata collected during traversal."""
+
     root: str
     edges: dict[str, list[str]]
     cycles: list[tuple[str, str]]
     resolved_versions: dict[str, str]
+
+
+@dataclass
+class _GraphBuilder:
+    """Mutable state used internally by the recursive DFS traversal."""
+
+    get_dependencies: Callable[[str, str], list[tuple[Dependency, str]]]
+    edges: dict[str, list[str]] = field(default_factory=dict)
+    cycles: list[tuple[str, str]] = field(default_factory=list)
+    resolved_versions: dict[str, str] = field(default_factory=dict)
+    expanded: set[tuple[str, str]] = field(default_factory=set)
+    active: list[str] = field(default_factory=list)
+
+    def visit(self, package: str, version: str) -> None:
+        """Visit a package and recursively expand its dependencies."""
+        key = (package.casefold(), version.casefold())
+        if key in self.expanded:
+            return
+        self.active.append(package)
+        self.edges.setdefault(package, [])
+        try:
+            self._visit_children(package, version)
+        finally:
+            self.active.pop()
+            self.expanded.add(key)
+
+    def _visit_children(self, package: str, version: str) -> None:
+        """Add outgoing edges and descend into non-cyclic children."""
+        for dependency, concrete_version in self.get_dependencies(
+            package, version
+        ):
+            child = dependency.package_id
+            if child not in self.edges[package]:
+                self.edges[package].append(child)
+            self.resolved_versions.setdefault(child, concrete_version)
+            if self._is_active(child):
+                self._record_cycle(package, child)
+                self.edges.setdefault(child, [])
+                continue
+            self.visit(child, concrete_version)
+
+    def _is_active(self, package: str) -> bool:
+        """Check whether a package is already on the current DFS path."""
+        key = package.casefold()
+        return any(item.casefold() == key for item in self.active)
+
+    def _record_cycle(self, source: str, target: str) -> None:
+        """Record a cycle edge once."""
+        cycle = (source, target)
+        if cycle not in self.cycles:
+            self.cycles.append(cycle)
 
 
 def build_graph_dfs(
@@ -22,77 +75,94 @@ def build_graph_dfs(
 ) -> GraphResult:
     """Build all reachable dependencies using recursive depth-first search.
 
-    get_dependencies(package, version) returns (dependency metadata,
-    concrete version to inspect) pairs. Edges to an ancestor are retained,
-    but recursion stops there to avoid an infinite cycle.
+    The callback returns dependency metadata paired with a concrete version.
+    Edges to ancestors are retained, but recursion stops at those edges.
     """
-    edges: dict[str, list[str]] = {}
-    cycles: list[tuple[str, str]] = []
-    resolved_versions: dict[str, str] = {root_name: root_version}
-    expanded: set[tuple[str, str]] = set()
-    active: list[str] = []
-
-    def visit(package: str, version: str) -> None:
-        key = (package.casefold(), version.casefold())
-        if key in expanded:
-            return
-        active.append(package)
-        edges.setdefault(package, [])
-        try:
-            for dependency, concrete_version in get_dependencies(package, version):
-                child = dependency.package_id
-                if child not in edges[package]:
-                    edges[package].append(child)
-                resolved_versions.setdefault(child, concrete_version)
-                if any(item.casefold() == child.casefold() for item in active):
-                    cycle = (package, child)
-                    if cycle not in cycles:
-                        cycles.append(cycle)
-                    edges.setdefault(child, [])
-                    continue
-                visit(child, concrete_version)
-        finally:
-            active.pop()
-            expanded.add(key)
-
-    visit(root_name, root_version)
-    return GraphResult(root_name, edges, cycles, resolved_versions)
+    builder = _GraphBuilder(get_dependencies=get_dependencies)
+    builder.resolved_versions[root_name] = root_version
+    builder.visit(root_name, root_version)
+    return GraphResult(
+        root=root_name,
+        edges=builder.edges,
+        cycles=builder.cycles,
+        resolved_versions=builder.resolved_versions,
+    )
 
 
-def format_graph(result: GraphResult) -> str:
-    """Render adjacency list and a readable DFS tree."""
+def _format_adjacency(result: GraphResult) -> list[str]:
+    """Format graph edges as an adjacency list."""
     lines = ["Граф зависимостей (список смежности):"]
     for package, dependencies in result.edges.items():
-        suffix = ", ".join(dependencies) if dependencies else "(нет зависимостей)"
+        suffix = (
+            ", ".join(dependencies)
+            if dependencies
+            else "(нет зависимостей)"
+        )
         lines.append(f"{package} -> {suffix}")
+    return lines
 
-    lines.extend(["", "Обход DFS (дерево зависимостей):"])
+
+def _draw_tree(result: GraphResult, lines: list[str]) -> None:
+    """Append a readable DFS tree to the output lines."""
     printed: set[str] = set()
 
-    def draw(package: str, prefix: str, is_last: bool, root: bool = False) -> None:
+    def draw(
+        package: str, prefix: str, is_last: bool, root: bool = False
+    ) -> None:
         if root:
             lines.append(package)
         else:
-            lines.append(prefix + ("└── " if is_last else "├── ") + package)
+            branch = "└── " if is_last else "├── "
+            lines.append(prefix + branch + package)
         if package in printed:
             return
         printed.add(package)
         children = result.edges.get(package, [])
-        next_prefix = prefix + ("    " if is_last else "│   ") if not root else ""
+        next_prefix = (
+            "" if root else prefix + ("    " if is_last else "│   ")
+        )
         for index, child in enumerate(children):
             last = index == len(children) - 1
             if child in printed:
-                marker = " [цикл]" if (package, child) in result.cycles else " [уже посещён]"
-                lines.append(next_prefix + ("└── " if last else "├── ") + child + marker)
+                _append_seen_child(
+                    result, lines, next_prefix, package, child, last
+                )
             else:
                 draw(child, next_prefix, last)
 
     draw(result.root, "", True, root=True)
+
+
+def _append_seen_child(
+    result: GraphResult,
+    lines: list[str],
+    prefix: str,
+    package: str,
+    child: str,
+    is_last: bool,
+) -> None:
+    """Append a tree entry for a cycle or an already visited node."""
+    branch = "└── " if is_last else "├── "
+    marker = (
+        " [цикл]"
+        if (package, child) in result.cycles
+        else " [уже посещён]"
+    )
+    lines.append(prefix + branch + child + marker)
+
+
+def format_graph(result: GraphResult) -> str:
+    """Render adjacency list, DFS tree, and detected cycles."""
+    lines = _format_adjacency(result)
+    lines.extend(["", "Обход DFS (дерево зависимостей):"])
+    _draw_tree(result, lines)
+    lines.extend(["", "Обнаружены циклические зависимости:"])
     if result.cycles:
-        lines.extend(["", "Обнаружены циклические зависимости:"])
-        lines.extend(f"{source} -> {target}" for source, target in result.cycles)
+        lines.extend(
+            f"{source} -> {target}" for source, target in result.cycles
+        )
     else:
-        lines.extend(["", "Циклические зависимости не обнаружены."])
+        lines[-1] = "Циклические зависимости не обнаружены."
     return "\n".join(lines)
 
 
@@ -100,51 +170,53 @@ class GraphError(ValueError):
     """Raised when a requested graph operation cannot be completed."""
 
 
-def find_reverse_dependencies_dfs(result: GraphResult, target: str) -> list[str]:
-    """Return reachable packages that directly depend on *target*.
-
-    The graph is traversed with recursive DFS, matching the algorithm used to
-    build the stage-3 graph. Each vertex is inspected once, so cycles are safe.
-    The result preserves DFS discovery order.
-    """
+def _find_target(result: GraphResult, target: str) -> str:
+    """Find the graph's canonical spelling for a target package."""
     target_key = target.casefold()
-    actual_target = next(
-        (package for package in result.edges if package.casefold() == target_key),
-        None,
+    for package in result.edges:
+        if package.casefold() == target_key:
+            return package
+    raise GraphError(
+        f"Пакет '{target}' отсутствует в построенном графе зависимостей."
     )
-    if actual_target is None:
-        raise GraphError(
-            f"Пакет '{target}' отсутствует в построенном графе зависимостей."
-        )
 
+
+def _collect_reverse(result: GraphResult, target: str) -> list[str]:
+    """Traverse the graph and collect direct dependants of target."""
+    target_key = target.casefold()
     reverse: list[str] = []
     visited: set[str] = set()
 
     def visit(package: str) -> None:
-        if package in visited:
+        key = package.casefold()
+        if key in visited:
             return
-        visited.add(package)
-
-        if any(
-            dependency.casefold() == target_key
-            for dependency in result.edges.get(package, [])
-        ) and package.casefold() != target_key:
-            if package not in reverse:
-                reverse.append(package)
-
-        for dependency in result.edges.get(package, []):
+        visited.add(key)
+        dependencies = result.edges.get(package, [])
+        has_target = any(item.casefold() == target_key for item in dependencies)
+        if has_target and key != target_key:
+            reverse.append(package)
+        for dependency in dependencies:
             visit(dependency)
 
     visit(result.root)
     return reverse
 
 
+def find_reverse_dependencies_dfs(
+    result: GraphResult, target: str
+) -> list[str]:
+    """Return reachable packages that directly depend on *target*."""
+    actual_target = _find_target(result, target)
+    return _collect_reverse(result, actual_target)
+
+
 def format_reverse_dependencies(target: str, packages: list[str]) -> str:
     """Format direct reverse dependencies for terminal output."""
     lines = [f"Обратные зависимости пакета '{target}':"]
-    if not packages:
-        lines.append("(в построенном графе таких пакетов нет)")
-    else:
+    if packages:
         lines.extend(f"- {package}" for package in packages)
+    else:
+        lines.append("(в построенном графе таких пакетов нет)")
     lines.append(f"Всего: {len(packages)}")
     return "\n".join(lines)

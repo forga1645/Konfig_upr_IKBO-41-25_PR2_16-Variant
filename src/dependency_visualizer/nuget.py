@@ -9,14 +9,22 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
-import xml.etree.ElementTree as ET
+import xml.etree.ElementTree as element_tree
+
+
+HTTP_NOT_FOUND = 404
+DEFAULT_TIMEOUT = 20
+USER_AGENT = "dependency-visualizer/0.2"
 
 
 @dataclass(frozen=True)
 class Dependency:
+    """Direct dependency metadata extracted from a NuGet package."""
+
     package_id: str
     version_range: str
     target_framework: str = "all"
@@ -31,6 +39,51 @@ def _local_name(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
+def _find_dependencies_node(root: element_tree.Element):
+    """Find the package's dependencies element, ignoring XML namespaces."""
+    for node in root.iter():
+        if _local_name(node.tag) == "dependencies":
+            return node
+    return None
+
+
+def _append_dependency(
+    node: element_tree.Element,
+    framework: str,
+    seen: set[tuple[str, str, str]],
+    result: list[Dependency],
+) -> None:
+    """Append a dependency once, retaining its framework and version range."""
+    package_id = node.attrib.get("id", "").strip()
+    version_range = node.attrib.get("version", "").strip() or "(не указана)"
+    if not package_id:
+        return
+    key = (package_id.casefold(), version_range, framework)
+    if key not in seen:
+        seen.add(key)
+        result.append(Dependency(package_id, version_range, framework))
+
+
+def _parse_dependency_groups(
+    node: element_tree.Element,
+    result: list[Dependency],
+    seen: set[tuple[str, str, str]],
+) -> None:
+    """Extract dependencies from target-framework groups or flat metadata."""
+    children = list(node)
+    groups = [item for item in children if _local_name(item.tag) == "group"]
+    if groups:
+        for group in groups:
+            framework = group.attrib.get("targetFramework", "all") or "all"
+            for dependency in group:
+                if _local_name(dependency.tag) == "dependency":
+                    _append_dependency(dependency, framework, seen, result)
+        return
+    for dependency in children:
+        if _local_name(dependency.tag) == "dependency":
+            _append_dependency(dependency, "all", seen, result)
+
+
 def parse_nuspec(xml_content: str | bytes) -> list[Dependency]:
     """Extract direct dependencies from a NuGet .nuspec document.
 
@@ -38,102 +91,153 @@ def parse_nuspec(xml_content: str | bytes) -> list[Dependency]:
     is retained so that alternatives for different frameworks are not hidden.
     """
     try:
-        root = ET.fromstring(xml_content)
-    except ET.ParseError as error:
-        raise NuGetError(f"Некорректный XML .nuspec: {error}") from error
-
-    dependencies_node = next(
-        (node for node in root.iter() if _local_name(node.tag) == "dependencies"),
-        None,
-    )
+        root = element_tree.fromstring(xml_content)
+    except element_tree.ParseError as error:
+        message = f"Некорректный XML .nuspec: {error}"
+        raise NuGetError(message) from error
+    dependencies_node = _find_dependencies_node(root)
     if dependencies_node is None:
         return []
-
     result: list[Dependency] = []
     seen: set[tuple[str, str, str]] = set()
-
-    def add_dependency(node: ET.Element, framework: str) -> None:
-        package_id = node.attrib.get("id", "").strip()
-        version_range = node.attrib.get("version", "").strip() or "(не указана)"
-        if not package_id:
-            return
-        key = (package_id.casefold(), version_range, framework)
-        if key not in seen:
-            seen.add(key)
-            result.append(Dependency(package_id, version_range, framework))
-
-    children = list(dependencies_node)
-    groups = [node for node in children if _local_name(node.tag) == "group"]
-    if groups:
-        for group in groups:
-            framework = group.attrib.get("targetFramework", "all") or "all"
-            for node in group:
-                if _local_name(node.tag) == "dependency":
-                    add_dependency(node, framework)
-    else:
-        for node in children:
-            if _local_name(node.tag) == "dependency":
-                add_dependency(node, "all")
-
+    _parse_dependency_groups(dependencies_node, result, seen)
     return result
 
 
-def _http_get(url: str, timeout: int = 20) -> bytes:
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": "dependency-visualizer/0.2", "Accept": "application/json, application/xml, */*"},
-    )
+def _http_get(url: str, timeout: int = DEFAULT_TIMEOUT) -> bytes:
+    """Fetch a URL and convert transport failures into NuGetError."""
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json, application/xml, */*",
+    }
+    request = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.read()
     except urllib.error.HTTPError as error:
-        if error.code == 404:
-            raise NuGetError(f"Пакет или версия не найдены (HTTP 404): {url}") from error
-        raise NuGetError(f"Ошибка HTTP {error.code} при обращении к NuGet: {url}") from error
+        if error.code == HTTP_NOT_FOUND:
+            message = f"Пакет или версия не найдены (HTTP 404): {url}"
+        else:
+            message = f"Ошибка HTTP {error.code} при обращении к NuGet: {url}"
+        raise NuGetError(message) from error
     except (urllib.error.URLError, TimeoutError, OSError) as error:
-        raise NuGetError(f"Не удалось обратиться к репозиторию NuGet: {error}") from error
+        message = f"Не удалось обратиться к репозиторию NuGet: {error}"
+        raise NuGetError(message) from error
 
 
-def _find_package_base_address(service_index: dict, repository_url: str) -> str:
+def _find_package_base_address(
+    service_index: dict,
+    repository_url: str,
+) -> str:
+    """Find the NuGet flat-container endpoint in a V3 service index."""
     resources = service_index.get("resources", [])
     for resource in resources:
         resource_type = resource.get("@type", "")
-        types = resource_type if isinstance(resource_type, list) else [resource_type]
-        if any(str(value).startswith("PackageBaseAddress/") for value in types):
-            base = resource.get("@id")
-            if isinstance(base, str) and base:
-                return base.rstrip("/") + "/"
-    # Some private feeds expose the flat-container endpoint directly.
+        types = (
+            resource_type
+            if isinstance(resource_type, list)
+            else [resource_type]
+        )
+        is_package_base = any(
+            str(value).startswith("PackageBaseAddress/") for value in types
+        )
+        base = resource.get("@id")
+        if is_package_base and isinstance(base, str) and base:
+            return base.rstrip("/") + "/"
     if "flatcontainer" in repository_url.lower():
         return repository_url.rstrip("/") + "/"
-    raise NuGetError(
+    message = (
         "В service index репозитория не найден ресурс PackageBaseAddress. "
         "Укажите URL NuGet V3 service index."
     )
+    raise NuGetError(message)
 
 
-def fetch_dependencies(package_name: str, package_version: str, repository_url: str) -> list[Dependency]:
-    """Fetch one exact package version from a NuGet V3 service index."""
-    index_bytes = _http_get(repository_url)
+def _decode_service_index(index_bytes: bytes) -> dict:
+    """Decode and validate a NuGet V3 service index response."""
     try:
         service_index = json.loads(index_bytes.decode("utf-8-sig"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise NuGetError(f"Репозиторий вернул некорректный JSON service index: {error}") from error
+        message = f"Репозиторий вернул некорректный JSON service index: {error}"
+        raise NuGetError(message) from error
     if not isinstance(service_index, dict):
-        raise NuGetError("Некорректный формат NuGet service index: ожидался JSON-объект.")
+        message = (
+            "Некорректный формат NuGet service index: "
+            "ожидался JSON-объект."
+        )
+        raise NuGetError(message)
+    return service_index
 
+
+def fetch_dependencies(
+    package_name: str,
+    package_version: str,
+    repository_url: str,
+) -> list[Dependency]:
+    """Fetch one exact package version from a NuGet V3 service index."""
+    index_bytes = _http_get(repository_url)
+    service_index = _decode_service_index(index_bytes)
     base_address = _find_package_base_address(service_index, repository_url)
     package_id = urllib.parse.quote(package_name.lower(), safe="")
     version = urllib.parse.quote(package_version.lower(), safe="")
-    nuspec_url = urllib.parse.urljoin(
-        base_address,
-        f"{package_id}/{version}/{package_id}.nuspec",
-    )
-    nuspec_bytes = _http_get(nuspec_url)
-    return parse_nuspec(nuspec_bytes)
+    package_path = f"{package_id}/{version}/{package_id}.nuspec"
+    nuspec_url = urllib.parse.urljoin(base_address, package_path)
+    return parse_nuspec(_http_get(nuspec_url))
 
 
-def load_test_dependencies(repository_file: str | Path, package_name: str, package_version: str) -> list[Dependency]:
+def _find_test_package(data: dict, package_name: str, version: str) -> list:
+    """Find one package version in a test fixture."""
+    try:
+        package_versions = next(
+            value for key, value in data["packages"].items()
+            if key.casefold() == package_name.casefold()
+        )
+        package_data = package_versions[version]
+        return package_data.get("dependencies", [])
+    except (KeyError, StopIteration, TypeError, AttributeError) as error:
+        message = (
+            f"В тестовом репозитории не найден пакет '{package_name}' "
+            f"версии '{version}'."
+        )
+        raise NuGetError(message) from error
+
+
+def _read_test_fixture(path: Path) -> dict:
+    """Read a JSON test fixture and normalize file/JSON errors."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except OSError as error:
+        message = f"Не удалось прочитать тестовый репозиторий: {error}"
+        raise NuGetError(message) from error
+    except json.JSONDecodeError as error:
+        message = f"Некорректный JSON тестового репозитория: {error}"
+        raise NuGetError(message) from error
+
+
+def _convert_test_dependencies(items: list) -> list[Dependency]:
+    """Convert fixture entries to Dependency objects."""
+    dependencies = []
+    for item in items:
+        valid_item = isinstance(item, dict)
+        valid_id = valid_item and isinstance(item.get("id"), str)
+        if not valid_id:
+            message = "Каждая тестовая зависимость должна содержать "
+            raise NuGetError(message + "строковое поле 'id'.")
+        dependencies.append(
+            Dependency(
+                package_id=item["id"],
+                version_range=str(item.get("version", "(не указана)")),
+                target_framework=str(item.get("target_framework", "all")),
+            )
+        )
+    return dependencies
+
+
+def load_test_dependencies(
+    repository_file: str | Path,
+    package_name: str,
+    package_version: str,
+) -> list[Dependency]:
     """Load dependencies from a small JSON fixture (offline test mode).
 
     Fixture schema: {"packages": {"Package.Id": {"1.0.0":
@@ -141,99 +245,112 @@ def load_test_dependencies(repository_file: str | Path, package_name: str, packa
     "target_framework": "net8.0"}]}}}}
     """
     path = Path(repository_file).expanduser()
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except OSError as error:
-        raise NuGetError(f"Не удалось прочитать тестовый репозиторий: {error}") from error
-    except json.JSONDecodeError as error:
-        raise NuGetError(f"Некорректный JSON тестового репозитория: {error}") from error
-
-    try:
-        package_versions = next(
-            value for key, value in data["packages"].items()
-            if key.casefold() == package_name.casefold()
-        )
-        package_data = package_versions[package_version]
-        raw_dependencies = package_data.get("dependencies", [])
-    except (KeyError, StopIteration, TypeError, AttributeError) as error:
-        raise NuGetError(
-            f"В тестовом репозитории не найден пакет '{package_name}' версии '{package_version}'."
-        ) from error
-
-    dependencies: list[Dependency] = []
-    for item in raw_dependencies:
-        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
-            raise NuGetError("Каждая тестовая зависимость должна содержать строковое поле 'id'.")
-        dependencies.append(Dependency(
-            package_id=item["id"],
-            version_range=str(item.get("version", "(не указана)")),
-            target_framework=str(item.get("target_framework", "all")),
-        ))
-    return dependencies
+    data = _read_test_fixture(path)
+    items = _find_test_package(data, package_name, package_version)
+    return _convert_test_dependencies(items)
 
 
 def _version_key(version: str):
-    """A small NuGet/SemVer ordering helper implemented with stdlib only."""
-    import re
-
+    """Return a comparable key for common NuGet/SemVer version strings."""
     clean = version.split("+", 1)[0]
     main, separator, prerelease = clean.partition("-")
     numbers = tuple(int(part) for part in main.split("."))
     pre_parts = []
     if separator:
         for part in prerelease.split("."):
-            pre_parts.append((0, int(part)) if part.isdigit() else (1, part.casefold()))
-    return numbers, (1, ()) if not separator else (0, tuple(pre_parts))
+            value = (0, int(part)) if part.isdigit() else (1, part.casefold())
+            pre_parts.append(value)
+    release_key = (1, ()) if not separator else (0, tuple(pre_parts))
+    return numbers, release_key
+
+
+def _is_interval(value: str) -> bool:
+    """Return whether a version expression is a bracketed interval."""
+    return value.startswith(("[", "(")) and value.endswith(("]", ")"))
+
+
+def _matches_exact_interval(candidate, body: str) -> bool:
+    """Check an exact NuGet interval such as [1.2.3]."""
+    return candidate == _version_key(body.strip()) if body.strip() else True
+
+
+def _matches_lower_bound(candidate, lower: str, inclusive: bool) -> bool:
+    """Check a lower endpoint of a version interval."""
+    if not lower:
+        return True
+    lower_key = _version_key(lower)
+    return candidate > lower_key or (inclusive and candidate == lower_key)
+
+
+def _matches_upper_bound(candidate, upper: str, inclusive: bool) -> bool:
+    """Check an upper endpoint of a version interval."""
+    if not upper:
+        return True
+    upper_key = _version_key(upper)
+    return candidate < upper_key or (inclusive and candidate == upper_key)
+
+
+def _matches_interval(candidate, value: str) -> bool:
+    """Check exact and bounded NuGet interval expressions."""
+    body = value[1:-1]
+    if "," not in body:
+        return _matches_exact_interval(candidate, body)
+    lower, upper = (part.strip() for part in body.split(",", 1))
+    lower_ok = _matches_lower_bound(candidate, lower, value[0] == "[")
+    upper_ok = _matches_upper_bound(candidate, upper, value[-1] == "]")
+    return lower_ok and upper_ok
 
 
 def _satisfies_version(version: str, version_range: str) -> bool:
     """Check common NuGet exact, minimum and interval version expressions."""
     value = version_range.strip()
-    if not value or value == "(не указана)" or value == "*":
+    if not value or value in {"(не указана)", "*"}:
         return True
     try:
         candidate = _version_key(version)
-        if value[0:1] in "[(" and value[-1:] in ")]":
-            body = value[1:-1]
-            if "," not in body:
-                return candidate == _version_key(body.strip()) if body.strip() else True
-            lower, upper = (part.strip() for part in body.split(",", 1))
-            if lower:
-                lower_key = _version_key(lower)
-                if candidate < lower_key or (candidate == lower_key and value[0] == "("):
-                    return False
-            if upper:
-                upper_key = _version_key(upper)
-                if candidate > upper_key or (candidate == upper_key and value[-1] == ")"):
-                    return False
-            return True
-        # A bare NuGet version is a minimum inclusive version.
+        if _is_interval(value):
+            return _matches_interval(candidate, value)
         return candidate >= _version_key(value)
     except (ValueError, TypeError):
-        # Unknown/floating syntax: avoid silently claiming a precise match.
         return version.casefold() == value.casefold()
 
 
-def resolve_dependency_version(package_name: str, version_range: str, repository_url: str) -> str:
-    """Resolve a dependency range to the highest matching version in NuGet."""
-    index_bytes = _http_get(repository_url)
-    try:
-        service_index = json.loads(index_bytes.decode("utf-8-sig"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise NuGetError(f"Некорректный JSON service index: {error}") from error
-    base_address = _find_package_base_address(service_index, repository_url)
+def _fetch_version_list(package_name: str, repository_url: str) -> list[str]:
+    """Fetch and decode the available versions for one package."""
+    index = _decode_service_index(_http_get(repository_url))
+    base = _find_package_base_address(index, repository_url)
     package_id = urllib.parse.quote(package_name.lower(), safe="")
-    versions_url = urllib.parse.urljoin(base_address, f"{package_id}/index.json")
+    versions_url = urllib.parse.urljoin(base, f"{package_id}/index.json")
     try:
         payload = json.loads(_http_get(versions_url).decode("utf-8-sig"))
-        versions = payload.get("versions", [])
+        return payload.get("versions", [])
     except (UnicodeDecodeError, json.JSONDecodeError, AttributeError) as error:
-        raise NuGetError(f"Не удалось прочитать список версий {package_name}: {error}") from error
-    matching = [item for item in versions if isinstance(item, str) and _satisfies_version(item, version_range)]
+        message = f"Не удалось прочитать список версий {package_name}: {error}"
+        raise NuGetError(message) from error
+
+
+def _matching_versions(versions: list, version_range: str) -> list[str]:
+    """Filter version strings using the requested NuGet version range."""
+    return [
+        item for item in versions
+        if isinstance(item, str) and _satisfies_version(item, version_range)
+    ]
+
+
+def resolve_dependency_version(
+    package_name: str,
+    version_range: str,
+    repository_url: str,
+) -> str:
+    """Resolve a dependency range to the highest matching NuGet version."""
+    versions = _fetch_version_list(package_name, repository_url)
+    matching = _matching_versions(versions, version_range)
     if not matching:
-        raise NuGetError(
-            f"Для зависимости '{package_name}' не найдена версия, подходящая под '{version_range}'."
+        message = (
+            f"Для зависимости '{package_name}' не найдена версия, "
+            f"подходящая под '{version_range}'."
         )
+        raise NuGetError(message)
     try:
         return max(matching, key=_version_key)
     except (ValueError, TypeError):

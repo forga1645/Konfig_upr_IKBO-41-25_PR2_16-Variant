@@ -12,7 +12,7 @@ from dependency_visualizer.test_repository import build_test_graph
 
 class ReverseDependencyTests(unittest.TestCase):
     @classmethod
-    def setUpClass(cls):
+    def setUpClass(cls):  # noqa: N802 - required by unittest
         fixture = Path(__file__).parent / "fixtures" / "stage3_graph.json"
         cls.graph = build_test_graph(fixture, "A")
 
@@ -25,13 +25,18 @@ class ReverseDependencyTests(unittest.TestCase):
         self.assertEqual(find_reverse_dependencies_dfs(self.graph, "E"), ["C"])
 
     def test_package_lookup_is_case_insensitive(self):
-        self.assertEqual(find_reverse_dependencies_dfs(self.graph, "d"), ["B", "C"])
+        actual = find_reverse_dependencies_dfs(self.graph, "d")
+        self.assertEqual(actual, ["B", "C"])
 
     def test_reverse_dependency_through_cycle(self):
         self.assertEqual(find_reverse_dependencies_dfs(self.graph, "A"), ["D"])
 
     def test_no_reverse_dependencies_in_acyclic_test_repository(self):
-        fixture = Path(__file__).parent / "fixtures" / "stage4_acyclic_graph.json"
+        fixture = (
+            Path(__file__).parent
+            / "fixtures"
+            / "stage4_acyclic_graph.json"
+        )
         acyclic = build_test_graph(fixture, "A")
         self.assertEqual(find_reverse_dependencies_dfs(acyclic, "A"), [])
 

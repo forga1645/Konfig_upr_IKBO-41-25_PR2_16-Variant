@@ -9,6 +9,8 @@ from urllib.parse import urlparse
 
 @dataclass(frozen=True)
 class AppConfig:
+    """Validated application settings."""
+
     package_name: str
     repository: str
     test_mode: bool
@@ -18,24 +20,24 @@ class AppConfig:
 
 
 def _require_string(data: dict, key: str) -> str:
+    """Return a non-empty string configuration value."""
     value = data.get(key)
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"Параметр '{key}' должен быть непустой строкой.")
     return value.strip()
 
 
-def load_config(config_path: str | Path) -> AppConfig:
-    """Read config.toml and validate every parameter."""
-    path = Path(config_path)
-    if not path.is_file():
-        raise FileNotFoundError(f"Файл конфигурации не найден: {path}")
-
+def _read_toml(path: Path) -> dict:
+    """Read TOML data and translate parser errors to ValueError."""
     try:
         with path.open("rb") as config_file:
-            data = tomllib.load(config_file)
+            return tomllib.load(config_file)
     except tomllib.TOMLDecodeError as error:
         raise ValueError(f"Ошибка синтаксиса TOML: {error}") from error
 
+
+def _validate_required(data: dict) -> None:
+    """Ensure that all required configuration keys are present."""
     required = {
         "package_name", "repository", "test_mode",
         "package_version", "output_file", "ascii_tree",
@@ -44,17 +46,18 @@ def load_config(config_path: str | Path) -> AppConfig:
     if missing:
         raise ValueError("Отсутствуют параметры: " + ", ".join(missing))
 
-    package_name = _require_string(data, "package_name")
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", package_name):
+
+def _validate_package_name(value: str) -> None:
+    """Validate a NuGet package identifier."""
+    pattern = r"[A-Za-z0-9][A-Za-z0-9._-]*"
+    if not re.fullmatch(pattern, value):
         raise ValueError(
             "Параметр 'package_name' содержит недопустимые символы."
         )
 
-    repository = _require_string(data, "repository")
-    test_mode = data["test_mode"]
-    if not isinstance(test_mode, bool):
-        raise ValueError("Параметр 'test_mode' должен быть true или false.")
 
+def _validate_repository(repository: str, test_mode: bool) -> None:
+    """Validate a local fixture path or a NuGet HTTP repository URL."""
     if test_mode:
         repo_path = Path(repository).expanduser()
         if not repo_path.exists():
@@ -64,29 +67,62 @@ def load_config(config_path: str | Path) -> AppConfig:
             )
         if not repo_path.is_file():
             raise ValueError("Файл тестового репозитория должен быть файлом.")
-    else:
-        parsed_url = urlparse(repository)
-        if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
-            raise ValueError(
-                "В обычном режиме 'repository' должен быть URL с http или https."
-            )
+        return
 
-    package_version = _require_string(data, "package_version")
-    if not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+_-]*", package_version):
-        raise ValueError("Параметр 'package_version' имеет неверный формат.")
-
-    output_file = _require_string(data, "output_file")
-    output_path = Path(output_file)
-    if output_path.name != output_file or output_path.suffix.lower() != ".svg":
+    parsed_url = urlparse(repository)
+    valid_scheme = parsed_url.scheme in {"http", "https"}
+    if not valid_scheme or not parsed_url.netloc:
         raise ValueError(
-            "Параметр 'output_file' должен быть именем файла с расширением .svg "
-            "без пути к папке."
+            "В обычном режиме 'repository' должен быть URL "
+            "с http или https."
         )
 
-    ascii_tree = data["ascii_tree"]
-    if not isinstance(ascii_tree, bool):
-        raise ValueError("Параметр 'ascii_tree' должен быть true или false.")
 
+def _validate_version(value: str) -> None:
+    """Validate the configured package version string."""
+    pattern = r"[0-9A-Za-z][0-9A-Za-z.+_-]*"
+    if not re.fullmatch(pattern, value):
+        raise ValueError("Параметр 'package_version' имеет неверный формат.")
+
+
+def _validate_output_file(value: str) -> None:
+    """Require a simple SVG filename without directory components."""
+    output_path = Path(value)
+    valid_name = output_path.name == value
+    if not valid_name or output_path.suffix.lower() != ".svg":
+        raise ValueError(
+            "Параметр 'output_file' должен быть именем файла "
+            "с расширением .svg без пути к папке."
+        )
+
+
+def _require_boolean(data: dict, key: str) -> bool:
+    """Return a boolean setting or raise a descriptive validation error."""
+    value = data[key]
+    if not isinstance(value, bool):
+        raise ValueError(f"Параметр '{key}' должен быть true или false.")
+    return value
+
+
+def load_config(config_path: str | Path) -> AppConfig:
+    """Read config.toml, validate all fields, and return AppConfig."""
+    path = Path(config_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Файл конфигурации не найден: {path}")
+
+    data = _read_toml(path)
+    _validate_required(data)
+    package_name = _require_string(data, "package_name")
+    repository = _require_string(data, "repository")
+    test_mode = _require_boolean(data, "test_mode")
+    package_version = _require_string(data, "package_version")
+    output_file = _require_string(data, "output_file")
+    ascii_tree = _require_boolean(data, "ascii_tree")
+
+    _validate_package_name(package_name)
+    _validate_repository(repository, test_mode)
+    _validate_version(package_version)
+    _validate_output_file(output_file)
     return AppConfig(
         package_name=package_name,
         repository=repository,

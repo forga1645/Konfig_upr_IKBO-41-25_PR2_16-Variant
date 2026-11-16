@@ -3,11 +3,15 @@ import unittest
 from pathlib import Path
 
 from dependency_visualizer.graph import GraphResult
-from dependency_visualizer.visualization import generate_dot, format_ascii_tree, render_svg
+from dependency_visualizer.visualization import (
+    format_ascii_tree,
+    generate_dot,
+    render_svg,
+)
 
 
 class VisualizationTests(unittest.TestCase):
-    def setUp(self):
+    def setUp(self):  # noqa: N802 - required by unittest
         self.graph = GraphResult(
             root="A",
             edges={"A": ["B", "C"], "B": ["D"], "C": ["D"], "D": ["A"]},
@@ -28,7 +32,10 @@ class VisualizationTests(unittest.TestCase):
         self.assertIn("D [already shown]", tree)
         self.assertIn("A [cycle]", tree)
 
-    @unittest.skipUnless(__import__("shutil").which("dot"), "Graphviz dot is not installed")
+    @unittest.skipUnless(
+        __import__("shutil").which("dot"),
+        "Graphviz dot is not installed",
+    )
     def test_render_svg_creates_nonempty_file(self):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "graph.svg"
