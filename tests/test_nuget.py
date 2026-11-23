@@ -24,7 +24,8 @@ NUSPEC = '''<?xml version="1.0"?>
     <dependencies>
       <group targetFramework="net8.0">
         <dependency id="System.Text.Json" version="[8.0.0, 9.0.0)" />
-        <dependency id="Microsoft.Extensions.Logging.Abstractions" version="8.0.0" />
+        <dependency id="Microsoft.Extensions.Logging.Abstractions"
+                    version="8.0.0" />
       </group>
       <group targetFramework="net6.0">
         <dependency id="System.Text.Json" version="[7.0.0, 8.0.0)" />
@@ -44,7 +45,8 @@ class NuGetTests(unittest.TestCase):
         self.assertEqual(dependencies[2].target_framework, "net6.0")
 
     def test_parse_nuspec_without_dependencies(self):
-        self.assertEqual(parse_nuspec("<package><metadata><id>A</id></metadata></package>"), [])
+        document = "<package><metadata><id>A</id></metadata></package>"
+        self.assertEqual(parse_nuspec(document), [])
 
     def test_invalid_nuspec(self):
         with self.assertRaisesRegex(NuGetError, "XML"):
@@ -58,7 +60,9 @@ class NuGetTests(unittest.TestCase):
                 "@type": "PackageBaseAddress/3.0.0",
             }]
         }
-        http_get.side_effect = [json.dumps(service_index).encode(), NUSPEC.encode()]
+        http_get.side_effect = [
+            json.dumps(service_index).encode(), NUSPEC.encode()
+        ]
         dependencies = fetch_dependencies(
             "Example.Library", "1.2.0", "https://api.nuget.org/v3/index.json"
         )
@@ -84,11 +88,16 @@ class NuGetTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "repo.json"
             path.write_text(json.dumps(fixture), encoding="utf-8")
-            dependencies = load_test_dependencies(path, "example.library", "1.2.0")
-        self.assertEqual(dependencies, [Dependency("System.Text.Json", "8.0.0", "net8.0")])
+            dependencies = load_test_dependencies(
+                path, "example.library", "1.2.0"
+            )
+        expected = [Dependency("System.Text.Json", "8.0.0", "net8.0")]
+        self.assertEqual(dependencies, expected)
 
     @patch("dependency_visualizer.nuget._http_get")
-    def test_resolve_dependency_version_uses_highest_matching_range(self, http_get):
+    def test_resolve_dependency_version_uses_highest_matching_range(
+        self, http_get
+    ):
         service_index = {"resources": [{
             "@id": "https://api.nuget.org/v3-flatcontainer/",
             "@type": "PackageBaseAddress/3.0.0",
@@ -107,7 +116,8 @@ class NuGetTests(unittest.TestCase):
     def test_test_repository_rejects_missing_version(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "repo.json"
-            path.write_text('{"packages": {"A": {"1.0": {"dependencies": []}}}}', encoding="utf-8")
+            content = '{"packages": {"A": {"1.0": {"dependencies": []}}}}'
+            path.write_text(content, encoding="utf-8")
             with self.assertRaisesRegex(NuGetError, "не найден"):
                 load_test_dependencies(path, "A", "2.0")
 

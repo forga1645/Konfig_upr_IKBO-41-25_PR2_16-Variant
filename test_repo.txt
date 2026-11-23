@@ -1,0 +1,6 @@
+{
+  "Newtonsoft.Json": ["Microsoft.CSharp", "System.Runtime.Serialization.Primitives"],
+  "Microsoft.CSharp": ["System.Dynamic.Runtime"],
+  "System.Runtime.Serialization.Primitives": [],
+  "System.Dynamic.Runtime": []
+}

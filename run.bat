@@ -1,32 +1,22 @@
 @echo off
 setlocal
+chcp 65001 >nul
 cd /d "%~dp0"
-set PYTHONPATH=%CD%\src
+set "PYTHONPATH=%CD%\src"
 
-where py >nul 2>nul
-if %errorlevel%==0 (
-    py -3.11 -c "import sys" >nul 2>nul
-    if %errorlevel%==0 (
-        py -3.11 -m dependency_visualizer --config config.toml
-        goto :finish
-    )
-)
+set "CONFIG_FILE=config.test.toml"
 
-python -c "import sys" >nul 2>nul
-if %errorlevel% neq 0 (
-    echo Python 3.11 or newer was not found.
-    echo Install Python and enable "Add Python to PATH".
-    pause
-    exit /b 1
-)
+echo Запуск с конфигурацией: %CONFIG_FILE%
+echo (Если используется сетевой режим, загрузка пакетов с NuGet может занять до 1 минуты...)
+echo.
 
-set PYTHONPATH=%CD%\src
-python -m dependency_visualizer --config config.toml
+py -3 -u -m dependency_visualizer --config "%CONFIG_FILE%" %*
 
-:finish
-if %errorlevel% neq 0 (
-    echo.
-    echo Application finished with an error.
+echo.
+if errorlevel 1 (
+    echo Программа завершилась с ошибкой.
+) else (
+    echo Готово!
 )
 pause
 endlocal

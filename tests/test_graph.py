@@ -5,7 +5,11 @@ from pathlib import Path
 
 from dependency_visualizer.graph import build_graph_dfs, format_graph
 from dependency_visualizer.nuget import Dependency
-from dependency_visualizer.test_repository import build_test_graph, load_test_graph, TestRepositoryError
+from dependency_visualizer.test_repository import (
+    TestRepositoryError,
+    build_test_graph,
+    load_test_graph,
+)
 
 
 class GraphTests(unittest.TestCase):

@@ -1,0 +1,6 @@
+{
+  "NEWTONSOFT": ["CSHARP", "SERIALIZATION"],
+  "CSHARP": ["DYNAMIC"],
+  "SERIALIZATION": [],
+  "DYNAMIC": []
+}
