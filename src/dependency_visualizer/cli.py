@@ -1,20 +1,23 @@
-"""Command-line entry point for the dependency visualizer."""
+"""Command-line entry point for the dependency visualizer (stages 1-3)."""
 
 import argparse
 import sys
 
 from dependency_visualizer.config import load_config
+from dependency_visualizer.graph import build_graph_dfs, format_graph
 from dependency_visualizer.nuget import (
+    Dependency,
     NuGetError,
     fetch_dependencies,
-    load_test_dependencies,
+    resolve_dependency_version,
 )
+from dependency_visualizer.test_repository import build_test_graph
 
 
 def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dependency-visualizer",
-        description="Получение прямых зависимостей NuGet-пакета (этап 2).",
+        description="Построение графа зависимостей NuGet-пакета (этап 3).",
     )
     parser.add_argument(
         "-c", "--config",
@@ -29,32 +32,43 @@ def main() -> int:
     try:
         config = load_config(args.config)
         if config.test_mode:
-            dependencies = load_test_dependencies(
-                config.repository, config.package_name, config.package_version
-            )
+            result = build_test_graph(config.repository, config.package_name)
         else:
-            dependencies = fetch_dependencies(
-                config.package_name, config.package_version, config.repository
+            # Cache resolved metadata to avoid repeating downloads for shared nodes.
+            dependency_cache: dict[tuple[str, str], list[tuple[Dependency, str]]] = {}
+
+            def get_dependencies(package: str, version: str):
+                key = (package.casefold(), version.casefold())
+                if key in dependency_cache:
+                    return dependency_cache[key]
+                direct = fetch_dependencies(package, version, config.repository)
+                resolved = []
+                for dependency in direct:
+                    concrete = resolve_dependency_version(
+                        dependency.package_id,
+                        dependency.version_range,
+                        config.repository,
+                    )
+                    resolved.append((dependency, concrete))
+                dependency_cache[key] = resolved
+                return resolved
+
+            result = build_graph_dfs(
+                config.package_name, config.package_version, get_dependencies
             )
     except (OSError, ValueError, NuGetError) as error:
         print(f"Ошибка: {error}", file=sys.stderr)
         return 2
 
-    print("Прямые зависимости NuGet-пакета")
-    print(f"Пакет: {config.package_name}")
+    print("Анализ зависимостей NuGet-пакета")
+    print(f"Корневой пакет: {config.package_name}")
     print(f"Версия: {config.package_version}")
-    print(f"Репозиторий: {config.repository}")
-    print(f"Количество прямых зависимостей: {len(dependencies)}")
-    if not dependencies:
-        print("Прямые зависимости отсутствуют.")
-    else:
-        for index, dependency in enumerate(dependencies, start=1):
-            print(
-                f"{index}. {dependency.package_id} "
-                f"(версия: {dependency.version_range}; "
-                f"целевой framework: {dependency.target_framework})"
-            )
-    print("\nЭтап 2 завершён: прямые зависимости получены.")
+    print(f"Режим тестового репозитория: {config.test_mode}")
+    print(format_graph(result))
+    print("\nВерсии пакетов:")
+    for package, version in result.resolved_versions.items():
+        print(f"{package}: {version}")
+    print("\nЭтап 3 завершён: граф зависимостей построен алгоритмом DFS.")
     return 0
 
 

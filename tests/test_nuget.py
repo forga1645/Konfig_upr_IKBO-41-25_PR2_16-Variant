@@ -12,6 +12,7 @@ from dependency_visualizer.nuget import (
     fetch_dependencies,
     load_test_dependencies,
     parse_nuspec,
+    resolve_dependency_version,
 )
 
 
@@ -85,6 +86,23 @@ class NuGetTests(unittest.TestCase):
             path.write_text(json.dumps(fixture), encoding="utf-8")
             dependencies = load_test_dependencies(path, "example.library", "1.2.0")
         self.assertEqual(dependencies, [Dependency("System.Text.Json", "8.0.0", "net8.0")])
+
+    @patch("dependency_visualizer.nuget._http_get")
+    def test_resolve_dependency_version_uses_highest_matching_range(self, http_get):
+        service_index = {"resources": [{
+            "@id": "https://api.nuget.org/v3-flatcontainer/",
+            "@type": "PackageBaseAddress/3.0.0",
+        }]}
+        versions = {"versions": ["7.0.0", "8.0.0", "8.1.0", "9.0.0"]}
+        http_get.side_effect = [
+            json.dumps(service_index).encode(),
+            json.dumps(versions).encode(),
+        ]
+        selected = resolve_dependency_version(
+            "System.Text.Json", "[8.0.0, 9.0.0)",
+            "https://api.nuget.org/v3/index.json",
+        )
+        self.assertEqual(selected, "8.1.0")
 
     def test_test_repository_rejects_missing_version(self):
         with tempfile.TemporaryDirectory() as directory:
