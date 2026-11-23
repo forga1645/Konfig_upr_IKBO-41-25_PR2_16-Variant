@@ -1,39 +1,32 @@
 @echo off
 setlocal
-
-rem ============================================================
-rem  run.bat — запуск визуализатора зависимостей (вариант №16)
-rem  Использование:
-rem      run.bat                (берёт config.toml по умолчанию)
-rem      run.bat my_config.toml (указывает свой конфиг)
-rem ============================================================
-
-rem Переходим в папку, где лежит этот bat-файл (корень проекта)
 cd /d "%~dp0"
+set PYTHONPATH=%CD%\src
 
-rem PYTHONPATH указывает на папку src
-set "PYTHONPATH=%~dp0src"
-
-rem Конфиг: первый аргумент или config.toml
-set "CONFIG=%~1"
-if "%CONFIG%"=="" set "CONFIG=config.toml"
-
-rem Проверка: есть ли файл конфигурации
-if not exist "%CONFIG%" (
-    echo [ОШИБКА] Файл конфигурации не найден: %CONFIG%
-    exit /b 2
+where py >nul 2>nul
+if %errorlevel%==0 (
+    py -3.11 -c "import sys" >nul 2>nul
+    if %errorlevel%==0 (
+        py -3.11 -m dependency_visualizer --config config.toml
+        goto :finish
+    )
 )
 
-rem Проверка: есть ли python в PATH
-where python >nul 2>nul
-if errorlevel 1 (
-    echo [ОШИБКА] Python не найден в PATH.
-    echo Установите Python 3.10+ и добавьте его в PATH.
-    exit /b 2
+python -c "import sys" >nul 2>nul
+if %errorlevel% neq 0 (
+    echo Python 3.11 or newer was not found.
+    echo Install Python and enable "Add Python to PATH".
+    pause
+    exit /b 1
 )
 
-rem Запуск
-python -m dependency_visualizer --config "%CONFIG%"
-set "RC=%ERRORLEVEL%"
+set PYTHONPATH=%CD%\src
+python -m dependency_visualizer --config config.toml
 
-endlocal & exit /b %RC%
+:finish
+if %errorlevel% neq 0 (
+    echo.
+    echo Application finished with an error.
+)
+pause
+endlocal
