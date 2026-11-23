@@ -94,3 +94,57 @@ def format_graph(result: GraphResult) -> str:
     else:
         lines.extend(["", "Циклические зависимости не обнаружены."])
     return "\n".join(lines)
+
+
+class GraphError(ValueError):
+    """Raised when a requested graph operation cannot be completed."""
+
+
+def find_reverse_dependencies_dfs(result: GraphResult, target: str) -> list[str]:
+    """Return reachable packages that directly depend on *target*.
+
+    The graph is traversed with recursive DFS, matching the algorithm used to
+    build the stage-3 graph. Each vertex is inspected once, so cycles are safe.
+    The result preserves DFS discovery order.
+    """
+    target_key = target.casefold()
+    actual_target = next(
+        (package for package in result.edges if package.casefold() == target_key),
+        None,
+    )
+    if actual_target is None:
+        raise GraphError(
+            f"Пакет '{target}' отсутствует в построенном графе зависимостей."
+        )
+
+    reverse: list[str] = []
+    visited: set[str] = set()
+
+    def visit(package: str) -> None:
+        if package in visited:
+            return
+        visited.add(package)
+
+        if any(
+            dependency.casefold() == target_key
+            for dependency in result.edges.get(package, [])
+        ) and package.casefold() != target_key:
+            if package not in reverse:
+                reverse.append(package)
+
+        for dependency in result.edges.get(package, []):
+            visit(dependency)
+
+    visit(result.root)
+    return reverse
+
+
+def format_reverse_dependencies(target: str, packages: list[str]) -> str:
+    """Format direct reverse dependencies for terminal output."""
+    lines = [f"Обратные зависимости пакета '{target}':"]
+    if not packages:
+        lines.append("(в построенном графе таких пакетов нет)")
+    else:
+        lines.extend(f"- {package}" for package in packages)
+    lines.append(f"Всего: {len(packages)}")
+    return "\n".join(lines)
